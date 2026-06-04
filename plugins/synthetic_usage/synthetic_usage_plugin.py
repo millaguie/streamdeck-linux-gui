@@ -39,7 +39,7 @@ DEFAULT_OPENCODE_AUTH = str(Path.home() / ".local" / "share" / "opencode" / "aut
 # user can wait 12 min for a regen tick), so it comes first.
 _WINDOW_ORDER = ("rolling_5h", "subscription", "weekly_credits")
 _WINDOW_LABELS = {
-    "rolling_5h": "5h",
+    "rolling_5h": "R5h",
     "subscription": "Day",
     "weekly_credits": "Wk$",
 }
@@ -325,8 +325,12 @@ class SyntheticUsagePlugin(BasePlugin):
             return False
 
     def _fetch_usage(self) -> bool:
-        if self.quota_sentinel_url:
-            return self._fetch_from_sentinel()
+        # Sentinel-first when configured, with a fall-through to direct
+        # mode so a misconfigured / restarting / outdated sentinel never
+        # blacks out the badge as long as the API key still works.
+        if self.quota_sentinel_url and self._fetch_from_sentinel():
+            self.error_message = None
+            return True
         return self._fetch_direct()
 
     # ---------------------------------------------------------------- rendering
@@ -413,35 +417,42 @@ class SyntheticUsagePlugin(BasePlugin):
             self.log(LogLevel.ERROR, f"Display update failed: {e}")
 
     def _render_compact(self) -> None:
-        h = self.headline or {}
-        wid = h.get("window", "?")
-        pct = float(h.get("utilization") or 0.0)
-        renew_label = self._format_renewal(h.get("renews_at"))
-        wlabel = _WINDOW_LABELS.get(wid, wid[:3])
+        """Show up to 2 windows side-by-side, OpenAI-plugin style."""
+        ordered = [(w, self.windows[w]) for w in _WINDOW_ORDER if w in self.windows]
+        if not ordered:
+            return
 
         img = Image.new("RGB", (72, 72), (20, 20, 20))
         draw = ImageDraw.Draw(img)
         font_title = self._load_font(10)
-        font_value = self._load_font(13)
-        font_small = self._load_font(9)
+        font_label = self._load_font(9)
 
-        dot = (76, 175, 80) if pct < 80 else (245, 127, 23) if pct < 95 else (183, 28, 28)
-        draw.ellipse([2, 2, 8, 8], fill=dot)
-        draw.text((12, 2), f"Synth·{wlabel}", fill=(255, 255, 255), font=font_title)
-
-        pct_color = self._bar_color(pct)
-        draw.text((36, 18), f"{pct:.0f}%", fill=pct_color, font=font_value, anchor="mt")
-
-        draw.text((4, 38), self._format_used(h), fill=(180, 180, 180), font=font_small)
-        draw.text(
-            (4, 50), f"renews {renew_label}", fill=(180, 180, 180), font=font_small
+        worst_pct = max(float(w.get("utilization") or 0.0) for _, w in ordered)
+        dot = (
+            (76, 175, 80) if worst_pct < 80
+            else (245, 127, 23) if worst_pct < 95
+            else (183, 28, 28)
         )
+        draw.ellipse([2, 2, 8, 8], fill=dot)
+        draw.text((12, 2), "Synth", fill=(255, 255, 255), font=font_title)
 
-        # Utilization bar
-        draw.rectangle([4, 63, 68, 69], fill=(30, 30, 30), outline=(80, 80, 80))
-        fill_w = int(64 * min(pct, 100) / 100)
-        if fill_w > 0:
-            draw.rectangle([5, 64, 4 + fill_w, 68], fill=pct_color)
+        y = 16
+        for wid, w in ordered[:2]:
+            pct = float(w.get("utilization") or 0.0)
+            label = _WINDOW_LABELS.get(wid, wid[:3])
+            draw.text((4, y), label, fill=(180, 180, 180), font=font_label)
+            draw.text(
+                (68, y), f"{pct:.0f}%", fill=(255, 255, 255),
+                font=font_label, anchor="rt",
+            )
+            bar_y = y + 11
+            draw.rectangle([4, bar_y, 68, bar_y + 6], fill=(30, 30, 30), outline=(80, 80, 80))
+            fill_w = int(64 * min(pct, 100) / 100)
+            if fill_w > 0:
+                draw.rectangle(
+                    [5, bar_y + 1, 4 + fill_w, bar_y + 5], fill=self._bar_color(pct)
+                )
+            y += 22
 
         self.update_image_raw(img)
 

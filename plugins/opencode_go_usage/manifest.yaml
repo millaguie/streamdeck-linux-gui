@@ -17,9 +17,28 @@ variables:
     description: "OpenCode workspace UUID. Find it in the URL bar after logging in to opencode.ai — the workspace dashboard lives at https://opencode.ai/workspace/<workspace_id>/go. Required for direct-scrape mode; the Quota Sentinel can read it from its own provider_config instead."
     required: false
 
+  - name: browser
+    type: select
+    description: "Auto-read the 'auth' cookie from a local browser. Pick 'disabled' to use the pasted auth_cookie."
+    required: false
+    default: ""
+    choices:
+      - {value: "",         label: "disabled (use pasted cookie)"}
+      - {value: "auto",     label: "auto (firefox → brave → chrome → chromium)"}
+      - {value: "firefox",  label: "Firefox"}
+      - {value: "brave",    label: "Brave"}
+      - {value: "chrome",   label: "Chrome"}
+      - {value: "chromium", label: "Chromium"}
+
+  - name: cookie_domain
+    type: string
+    description: "Cookie domain to look up in the browser store (default: opencode.ai)."
+    required: false
+    default: opencode.ai
+
   - name: auth_cookie
     type: password
-    description: "Paste the VALUE of the 'auth' cookie from your browser (DevTools → Application/Storage → Cookies → opencode.ai → row 'auth' → copy the 'Value' column). Refresh when the meter reports HTTP 401 'auth cookie expired'."
+    description: "Paste the VALUE of the 'auth' cookie from your browser (DevTools → Application/Storage → Cookies → opencode.ai → row 'auth' → copy the 'Value' column). Only used when 'browser' is empty. Refresh when the meter reports HTTP 401 'auth cookie expired'."
     required: false
 
   - name: poll_interval

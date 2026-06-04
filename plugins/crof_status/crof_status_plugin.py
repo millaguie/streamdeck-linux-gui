@@ -27,6 +27,7 @@ from PIL import Image, ImageDraw, ImageFont
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from streamdeck_ui.plugin_system.base_plugin import BasePlugin
+from streamdeck_ui.plugin_system.browser_cookies import CookieError, list_cookies
 from streamdeck_ui.plugin_system.protocol import LogLevel
 
 MODELS_URL = "https://crof.ai/v1/models"
@@ -34,6 +35,7 @@ CREDITS_URL = "https://crof.ai/user-api/credits"
 USAGE_URL = "https://crof.ai/user-api/usage"
 USABLE_REQUESTS_URL = "https://crof.ai/u_v2/get_usable_requests"
 DASHBOARD_URL = "https://crof.ai/dashboard"
+COOKIE_DOMAIN = "crof.ai"
 DEFAULT_OPENCODE_AUTH = str(Path.home() / ".local" / "share" / "opencode" / "auth.json")
 
 # crof.ai stopped returning the plan ceiling from /u_v2/get_usable_requests
@@ -58,10 +60,21 @@ class CrofStatusPlugin(BasePlugin):
 
         self.api_key = config.get('api_key', '')
         self.session_cookie = config.get('session_cookie', '').strip()
+        self.browser = (config.get('browser') or '').strip().lower()
+        self.cookie_domain = (config.get('cookie_domain') or COOKIE_DOMAIN).strip()
         self.opencode_auth_path = config.get('opencode_auth_path', '') or DEFAULT_OPENCODE_AUTH
         self.poll_interval = max(int(config.get('poll_interval', 600)), 60)
         self.display_mode = config.get('display_mode', 'compact')
         self.rotate_interval = int(config.get('rotate_interval', 5))
+        # ``quota_sentinel_url`` — when set, credits/usable_requests come
+        # from the sentinel's ``/v1/providers/crofai`` instead of being
+        # scraped directly. /v1/models keeps using crof.ai directly since
+        # that endpoint is public.
+        self.quota_sentinel_url = (
+            (config.get('quota_sentinel_url') or '').split('/v1')[0].rstrip('/')
+        )
+        self._sentinel_api_key = ''
+        self._sentinel_instance_id = ''
 
         self.last_poll_time = 0
         self.error_message: str | None = None
@@ -166,13 +179,36 @@ class CrofStatusPlugin(BasePlugin):
             self.error_message = "Down"
             return False
 
+    def _resolve_session_cookie(self) -> str:
+        """Return the raw Flask ``session`` cookie value.
+
+        When ``browser`` is configured the value comes straight from the
+        browser store and bypasses ``_normalize_cookie``'s paste-cleanup
+        (the on-disk value is already canonical).
+        """
+        if not self.browser:
+            return self.session_cookie
+        try:
+            cookies = list_cookies(self.cookie_domain, browser=self.browser)
+        except CookieError as e:
+            self.log(LogLevel.WARNING, f"browser cookie lookup failed: {e}")
+            return self.session_cookie
+        value = cookies.get("session")
+        if not value:
+            self.log(
+                LogLevel.WARNING,
+                f"no 'session' cookie for {self.cookie_domain} in {self.browser}",
+            )
+            return self.session_cookie
+        return value
+
     def _normalize_cookie(self) -> str:
         """Strip common copy-paste artifacts from the session cookie value.
 
         Returns empty string and logs a warning if the value is obviously not
         a Flask session cookie (URL pasted by mistake, too short, etc.).
         """
-        c = self.session_cookie.strip().strip('"').strip("'")
+        c = self._resolve_session_cookie().strip().strip('"').strip("'")
         # If user pasted "session=VALUE; Path=/; ..." strip everything but value
         if c.lower().startswith("session="):
             c = c.split("=", 1)[1].split(";", 1)[0].strip()
@@ -184,12 +220,125 @@ class CrofStatusPlugin(BasePlugin):
             self.log(LogLevel.WARNING, f"session_cookie suspiciously short ({len(c)} chars) — typical Flask cookies are 100+")
         return c
 
+    # -------------------------------------------------------------- sentinel
+
+    def _sentinel_headers(self) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        if self._sentinel_api_key:
+            headers['X-API-Key'] = self._sentinel_api_key
+        return headers
+
+    def _register_with_sentinel(self) -> bool:
+        if self._sentinel_api_key:
+            return True
+        cookie = self._normalize_cookie()
+        if not cookie:
+            self.log(
+                LogLevel.WARNING,
+                "no session_cookie set — sentinel registration needs it for the "
+                "crof.ai dashboard (the /v1/models key is rejected by the quota endpoint)",
+            )
+            return False
+        try:
+            payload = {
+                'project_name': 'streamdeck-crofai',
+                'framework': 'opencode',
+                'auth': {'opencode_auth': {'crofai': {'key': self._resolve_key() or ''}}},
+                'provider_config': {'crofai': {'session_cookie': cookie}},
+            }
+            resp = requests.post(
+                f"{self.quota_sentinel_url}/v1/instances", json=payload, timeout=10
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            self._sentinel_api_key = data.get('api_key', '')
+            self._sentinel_instance_id = data.get('instance_id', '')
+            self.log(
+                LogLevel.INFO,
+                f"Registered with Sentinel as {self._sentinel_instance_id}",
+            )
+            return bool(self._sentinel_api_key)
+        except requests.exceptions.RequestException as e:
+            self.log(LogLevel.ERROR, f"Sentinel registration failed: {e}")
+            return False
+
+    def _provider_exists_in_sentinel(self, provider: str) -> bool:
+        try:
+            response = requests.get(
+                f"{self.quota_sentinel_url}/v1/providers",
+                headers=self._sentinel_headers(),
+                timeout=10,
+            )
+            if response.status_code == 401:
+                self.log(LogLevel.WARNING, "Sentinel auth expired, will re-register")
+                self._sentinel_api_key = ''
+                return False
+            response.raise_for_status()
+            providers = response.json()
+            if isinstance(providers, dict):
+                return provider in providers
+            return provider in [
+                p.get('name', p) if isinstance(p, dict) else p for p in providers
+            ]
+        except requests.exceptions.RequestException:
+            return False
+
+    def _fetch_from_sentinel(self) -> bool:
+        """Populate ``credits``/``usable_requests``/``requests_plan`` from
+        the sentinel's ``crofai`` provider.  Falls back to direct mode on
+        any error so a misconfigured sentinel doesn't black out the badge.
+        """
+        try:
+            if not self._register_with_sentinel():
+                return False
+            if not self._provider_exists_in_sentinel('crofai'):
+                self.log(LogLevel.INFO, "Provider 'crofai' not registered in Sentinel")
+                return False
+            response = requests.get(
+                f"{self.quota_sentinel_url}/v1/providers/crofai",
+                headers=self._sentinel_headers(),
+                timeout=10,
+            )
+            if response.status_code == 404:
+                return False
+            response.raise_for_status()
+            data = response.json()
+            if data.get('error'):
+                self.log(LogLevel.WARNING, f"Sentinel crofai error: {data['error']}")
+                return False
+            window = (data.get('windows') or {}).get('requests') or {}
+            meta = window.get('metadata') or {}
+            usable = meta.get('usable_requests')
+            plan = meta.get('requests_plan')
+            credits = meta.get('credits')
+            if usable is None and credits is None:
+                return False
+            if usable is not None:
+                self.usable_requests = float(usable)
+            if plan is not None:
+                self.requests_plan = int(plan)
+            if credits is not None:
+                self.credits = float(credits)
+            # /user-api/usage is not proxied by the sentinel — leave
+            # ``top_model`` / ``top_model_tokens`` as whatever the last
+            # direct fetch left behind (usually None).
+            self.session_ok = True
+            return True
+        except requests.exceptions.RequestException as e:
+            self.log(LogLevel.ERROR, f"Failed to fetch from Sentinel: {e}")
+            return False
+
     def _fetch_session_endpoints(self) -> None:
         """Fetch the session-cookie-only endpoints (credits, usage, usable requests).
 
         Sets self.session_ok. Failures are non-fatal (we still show models data).
         """
-        if not self.session_cookie:
+        # Sentinel mode short-circuits the direct dashboard scrape.  We
+        # still fall through to direct mode if the sentinel can't deliver
+        # so the user keeps a working badge.
+        if self.quota_sentinel_url and self._fetch_from_sentinel():
+            return
+        if not self.session_cookie and not self.browser:
             self.session_ok = None
             return
 
@@ -473,6 +622,13 @@ class CrofStatusPlugin(BasePlugin):
     def on_config_update(self, config: dict[str, Any]) -> None:
         self.api_key = config.get('api_key', '')
         self.session_cookie = config.get('session_cookie', '').strip()
+        self.browser = (config.get('browser') or '').strip().lower()
+        self.cookie_domain = (config.get('cookie_domain') or COOKIE_DOMAIN).strip()
+        self.quota_sentinel_url = (
+            (config.get('quota_sentinel_url') or '').split('/v1')[0].rstrip('/')
+        )
+        self._sentinel_api_key = ''
+        self._sentinel_instance_id = ''
         self.opencode_auth_path = config.get('opencode_auth_path', '') or DEFAULT_OPENCODE_AUTH
         self.poll_interval = max(int(config.get('poll_interval', 600)), 60)
         self.display_mode = config.get('display_mode', 'compact')

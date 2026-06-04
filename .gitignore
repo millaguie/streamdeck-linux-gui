@@ -92,3 +92,6 @@ out
 
 # Private fork notes
 TODO-CI-CONFIG.md
+
+# Claude Code local config
+.claude/

@@ -19,6 +19,7 @@ class VariableType(Enum):
     URL = "url"
     PASSWORD = "password"  # Will be masked in UI
     CERTIFICATE = "certificate"  # Special file picker for cert files
+    SELECT = "select"  # Dropdown — requires ``choices`` on the variable
 
 
 class LifecycleMode(Enum):
@@ -38,6 +39,10 @@ class PluginVariable:
     description: str
     required: bool = True
     default: Any | None = None
+    # ``choices`` is only meaningful for ``SELECT``.  Each entry is either
+    # a bare value (string shown verbatim) or ``{"value": ..., "label": ...}``
+    # for a separate stored value / display label.
+    choices: list[Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -47,6 +52,7 @@ class PluginVariable:
             "description": self.description,
             "required": self.required,
             "default": self.default,
+            "choices": self.choices,
         }
 
     @classmethod
@@ -58,6 +64,7 @@ class PluginVariable:
             description=data["description"],
             required=data.get("required", True),
             default=data.get("default"),
+            choices=data.get("choices"),
         )
 
 

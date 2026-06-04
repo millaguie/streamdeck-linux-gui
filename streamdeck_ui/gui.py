@@ -963,6 +963,7 @@ def _on_plugin_configure(tab, deck_id, page_id, button_id, button_state_id):
     """Open plugin configuration dialog."""
     from PySide6.QtWidgets import (
         QCheckBox,
+        QComboBox,
         QDialog,
         QDialogButtonBox,
         QDoubleSpinBox,
@@ -1026,11 +1027,64 @@ def _on_plugin_configure(tab, deck_id, page_id, button_id, button_state_id):
 
     # Build form
     config_widgets = {}
+
+    def _humanize(name: str) -> str:
+        cleaned = name.replace("_", " ").replace("-", " ").strip()
+        return cleaned[:1].upper() + cleaned[1:] if cleaned else name
+
+    def _short_label(var) -> str:
+        """First sentence of the description, capped at 70 chars.
+
+        We try to split on a sentence boundary (period followed by space
+        and an uppercase letter) so "e.g." / "v1." don't break the
+        heuristic.  Falls back to the humanised variable name when the
+        description is empty.  Trailing period stripped for tidiness.
+        """
+        desc = (var.description or "").strip().splitlines()[0].strip()
+        if not desc:
+            return _humanize(var.name)
+        # Look for a sentence boundary: ". " followed by an uppercase
+        # letter.  Skip "e.g.", "v1.", "i.e." etc.
+        first = desc
+        for i in range(len(desc) - 2):
+            if desc[i] == "." and desc[i + 1] == " " and desc[i + 2].isupper():
+                first = desc[:i]
+                break
+        if first.endswith("."):
+            first = first[:-1]
+        first = first.strip()
+        if len(first) > 70:
+            first = first[:67].rstrip() + "…"
+        return first or _humanize(var.name)
+
+    def _make_label_cell(var) -> "QWidget":
+        """Short label + ⓘ button.  The full description is attached as
+        a tooltip and as a click-popup, so long help text no longer
+        stretches the dialog wider than the screen."""
+        short = _short_label(var) + (" *" if var.required else "")
+        cell = QWidget()
+        h = QHBoxLayout(cell)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(4)
+        h.addWidget(QLabel(short + ":"))
+        if var.description:
+            info_btn = QPushButton("ⓘ")
+            info_btn.setFlat(True)
+            info_btn.setFixedSize(18, 18)
+            info_btn.setToolTip(var.description)
+            info_btn.setStyleSheet(
+                "QPushButton { border: none; color: #2a82da; font-weight: bold; }"
+            )
+            info_btn.clicked.connect(
+                lambda _checked=False, title=short, body=var.description:
+                QMessageBox.information(dialog, title.rstrip(" *:"), body)
+            )
+            h.addWidget(info_btn)
+        h.addStretch()
+        return cell
+
     for var in manifest.variables:
-        label_text = var.description
-        if var.required:
-            label_text += " *"
-        label = QLabel(label_text + ":")
+        label = _make_label_cell(var)
 
         current_value = current_config.get(var.name, var.default if var.default is not None else "")
 
@@ -1055,6 +1109,21 @@ def _on_plugin_configure(tab, deck_id, page_id, button_id, button_state_id):
         elif var.type == VariableType.BOOL:
             widget = QCheckBox()
             widget.setChecked(bool(current_value))
+        elif var.type == VariableType.SELECT:
+            widget = QComboBox()
+            # Accept either bare values or {"value": x, "label": y} entries.
+            for choice in (var.choices or []):
+                if isinstance(choice, dict):
+                    widget.addItem(str(choice.get("label", choice.get("value", ""))), choice.get("value"))
+                else:
+                    widget.addItem(str(choice), choice)
+            # Restore the saved value if it matches one of the choices,
+            # otherwise leave the combo on its first entry.
+            idx = widget.findData(current_value)
+            if idx < 0:
+                idx = widget.findText(str(current_value))
+            if idx >= 0:
+                widget.setCurrentIndex(idx)
         elif var.type in (VariableType.FILE_PATH, VariableType.DIR_PATH, VariableType.CERTIFICATE):
             container = QWidget()
             hlayout = QHBoxLayout(container)
@@ -1065,6 +1134,8 @@ def _on_plugin_configure(tab, deck_id, page_id, button_id, button_state_id):
             browse_btn.clicked.connect(lambda checked, w=widget, t=var.type: _browse_file(w, t))
             hlayout.addWidget(widget)
             hlayout.addWidget(browse_btn)
+            if var.description:
+                widget.setToolTip(var.description)
             config_widgets[var.name] = widget
             form_layout.addRow(label, container)
             continue
@@ -1072,6 +1143,8 @@ def _on_plugin_configure(tab, deck_id, page_id, button_id, button_state_id):
             widget = QLineEdit()
             widget.setText(str(current_value))
 
+        if var.description:
+            widget.setToolTip(var.description)
         config_widgets[var.name] = widget
         form_layout.addRow(label, widget)
 
@@ -1108,6 +1181,13 @@ def _on_plugin_configure(tab, deck_id, page_id, button_id, button_state_id):
                 value = widget.value()
             elif isinstance(widget, QCheckBox):
                 value = widget.isChecked()
+            elif isinstance(widget, QComboBox):
+                # ``currentData`` is the value the manifest declared;
+                # ``currentText`` is the fallback for bare-string choices
+                # that didn't get a userData attached.
+                value = widget.currentData()
+                if value is None:
+                    value = widget.currentText()
             else:
                 value = ""
 

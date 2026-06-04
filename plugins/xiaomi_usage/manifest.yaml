@@ -12,9 +12,28 @@ max_retries: 5
 retry_delay: 30
 
 variables:
+  - name: browser
+    type: select
+    description: "Auto-read cookies from a local browser instead of pasting them. Pick 'disabled' to use the pasted session_cookie."
+    required: false
+    default: ""
+    choices:
+      - {value: "",         label: "disabled (use pasted cookie)"}
+      - {value: "auto",     label: "auto (firefox → brave → chrome → chromium)"}
+      - {value: "firefox",  label: "Firefox"}
+      - {value: "brave",    label: "Brave"}
+      - {value: "chrome",   label: "Chrome"}
+      - {value: "chromium", label: "Chromium"}
+
+  - name: cookie_domain
+    type: string
+    description: "Cookie domain to look up in the browser store (default: platform.xiaomimimo.com)."
+    required: false
+    default: platform.xiaomimimo.com
+
   - name: session_cookie
     type: password
-    description: "Session cookie from platform.xiaomimimo.com (DevTools → Application → Cookies). The Token Plan tp-* API key is rejected by the usage console — only the browser session cookie works."
+    description: "Session cookie from platform.xiaomimimo.com (DevTools → Application → Cookies). Only used when 'browser' is empty. The Token Plan tp-* API key is rejected by the usage console — only the browser session cookie works."
     required: false
 
   - name: api_token

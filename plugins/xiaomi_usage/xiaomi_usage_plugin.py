@@ -34,9 +34,11 @@ from PIL import Image, ImageDraw, ImageFont
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from streamdeck_ui.plugin_system.base_plugin import BasePlugin
+from streamdeck_ui.plugin_system.browser_cookies import CookieError, list_cookies
 from streamdeck_ui.plugin_system.protocol import LogLevel
 
 USAGE_URL = "https://platform.xiaomimimo.com/api/v1/tokenPlan/usage"
+COOKIE_DOMAIN = "platform.xiaomimimo.com"
 DEFAULT_OPENCODE_AUTH = str(Path.home() / ".local" / "share" / "opencode" / "auth.json")
 
 # Order matters for "worst window" tie-breaks: when two windows share a
@@ -83,6 +85,11 @@ class XiaomiUsagePlugin(BasePlugin):
 
         self.session_cookie = config.get("session_cookie", "")
         self.api_token = config.get("api_token", "")
+        # ``browser`` is "" (legacy paste-the-cookie flow), or one of
+        # "auto"/"firefox"/"chrome"/"brave"/"chromium" — when set the
+        # plugin reads the cookie straight from the browser store.
+        self.browser = (config.get("browser") or "").strip().lower()
+        self.cookie_domain = (config.get("cookie_domain") or COOKIE_DOMAIN).strip()
         self.opencode_auth_path = (
             config.get("opencode_auth_path", "") or DEFAULT_OPENCODE_AUTH
         )
@@ -135,9 +142,33 @@ class XiaomiUsagePlugin(BasePlugin):
             self.log(LogLevel.ERROR, f"Failed to read opencode auth: {e}")
         return ""
 
+    def _resolve_session_cookie(self) -> str:
+        """Resolve the cookie header value.
+
+        Priority:
+        1. ``browser`` config option set → scrape the browser cookie store.
+           Fail fast on ``CookieError`` so the user sees "browser cookie not
+           found" instead of an opaque "Cookie expired" further down.
+        2. Manual ``session_cookie`` config value (legacy).
+        """
+        if self.browser:
+            try:
+                cookies = list_cookies(self.cookie_domain, browser=self.browser)
+            except CookieError as e:
+                self.log(LogLevel.WARNING, f"browser cookie lookup failed: {e}")
+                cookies = {}
+            if cookies:
+                return "; ".join(f"{k}={v}" for k, v in cookies.items())
+            self.log(
+                LogLevel.WARNING,
+                f"no cookies for {self.cookie_domain} in {self.browser} — "
+                "is the browser logged in?",
+            )
+        return (self.session_cookie or "").strip()
+
     def _build_cookie_header(self) -> str:
         """Accept either ``name=value`` pairs or a bare cookie value."""
-        cookie = (self.session_cookie or "").strip()
+        cookie = self._resolve_session_cookie()
         if "=" in cookie:
             return cookie
         return f"session={cookie}"
@@ -174,10 +205,14 @@ class XiaomiUsagePlugin(BasePlugin):
                 continue
             used = cls._coerce_int(item.get("used"))
             limit = cls._coerce_int(item.get("limit"))
-            if "percent" in item and item.get("percent") is not None:
-                pct = cls._clamp_pct(item.get("percent"))
-            elif limit > 0:
+            # Prefer used/limit over the API's ``percent`` field — the
+            # console returns ``percent`` as a truncated integer, so a
+            # real 3.68% comes back as ``0``.  Only fall back to the API
+            # value when ``limit`` is missing.
+            if limit > 0:
                 pct = cls._clamp_pct(used / limit * 100.0)
+            elif item.get("percent") is not None:
+                pct = cls._clamp_pct(item.get("percent"))
             else:
                 pct = 0.0
             out[wid] = {
@@ -254,7 +289,7 @@ class XiaomiUsagePlugin(BasePlugin):
     def _register_with_sentinel(self) -> bool:
         if self._sentinel_api_key:
             return True
-        cookie = (self.session_cookie or "").strip()
+        cookie = self._resolve_session_cookie()
         if not cookie:
             self.log(
                 LogLevel.WARNING,
@@ -281,7 +316,14 @@ class XiaomiUsagePlugin(BasePlugin):
                 json=payload,
                 timeout=10,
             )
-            resp.raise_for_status()
+            if not resp.ok:
+                self.log(
+                    LogLevel.ERROR,
+                    f"Sentinel registration HTTP {resp.status_code}: "
+                    f"{resp.text[:300]} | cookie_len={len(cookie)} "
+                    f"token={'set' if api_token else 'empty'}",
+                )
+                return False
             data = resp.json()
             self._sentinel_api_key = data.get("api_key", "")
             self._sentinel_instance_id = data.get("instance_id", "")
@@ -352,7 +394,7 @@ class XiaomiUsagePlugin(BasePlugin):
     # ------------------------------------------------------------------ direct
 
     def _fetch_direct(self) -> bool:
-        cookie = (self.session_cookie or "").strip()
+        cookie = self._resolve_session_cookie()
         if not cookie:
             self.error_message = "No\ncookie"
             return False
@@ -394,8 +436,13 @@ class XiaomiUsagePlugin(BasePlugin):
             return False
 
     def _fetch_usage(self) -> bool:
-        if self.quota_sentinel_url:
-            return self._fetch_from_sentinel()
+        # Try sentinel first when configured, but fall back to direct on
+        # failure — a misconfigured / outdated sentinel (e.g. running an
+        # older version without the xiaomi provider) shouldn't black out
+        # the badge as long as we still have a working cookie.
+        if self.quota_sentinel_url and self._fetch_from_sentinel():
+            self.error_message = None
+            return True
         return self._fetch_direct()
 
     # ---------------------------------------------------------------- rendering
@@ -581,6 +628,8 @@ class XiaomiUsagePlugin(BasePlugin):
     def on_config_update(self, config: dict[str, Any]) -> None:
         self.session_cookie = config.get("session_cookie", "")
         self.api_token = config.get("api_token", "")
+        self.browser = (config.get("browser") or "").strip().lower()
+        self.cookie_domain = (config.get("cookie_domain") or COOKIE_DOMAIN).strip()
         self.opencode_auth_path = (
             config.get("opencode_auth_path", "") or DEFAULT_OPENCODE_AUTH
         )

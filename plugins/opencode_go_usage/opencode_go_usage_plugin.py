@@ -34,9 +34,11 @@ from PIL import Image, ImageDraw, ImageFont
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from streamdeck_ui.plugin_system.base_plugin import BasePlugin  # noqa: E402
+from streamdeck_ui.plugin_system.browser_cookies import CookieError, list_cookies  # noqa: E402
 from streamdeck_ui.plugin_system.protocol import LogLevel  # noqa: E402
 
 DASHBOARD_URL = "https://opencode.ai/workspace/{workspace_id}/go"
+COOKIE_DOMAIN = "opencode.ai"
 _BROWSER_UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -90,6 +92,8 @@ class OpencodeGoUsagePlugin(BasePlugin):
 
         self.workspace_id = (config.get("workspace_id") or "").strip()
         self.auth_cookie = (config.get("auth_cookie") or "").strip()
+        self.browser = (config.get("browser") or "").strip().lower()
+        self.cookie_domain = (config.get("cookie_domain") or COOKIE_DOMAIN).strip()
         self.poll_interval = max(int(config.get("poll_interval", 300)), 60)
         self.display_mode = config.get("display_mode", "compact")
         self.rotate_interval = int(config.get("rotate_interval", 5))
@@ -123,7 +127,8 @@ class OpencodeGoUsagePlugin(BasePlugin):
         # Sentinel needs *something* to register against — we use the same
         # workspace_id+auth_cookie as direct mode and let the sentinel's
         # provider_config:opencode_go take precedence later if it exists.
-        if not self.workspace_id or not self.auth_cookie:
+        cookie = self._resolve_auth_cookie()
+        if not self.workspace_id or not cookie:
             self.log(
                 LogLevel.INFO,
                 "Sentinel mode set but workspace_id/auth_cookie are empty — "
@@ -138,7 +143,7 @@ class OpencodeGoUsagePlugin(BasePlugin):
                 "provider_config": {
                     "opencode_go": {
                         "workspace_id": self.workspace_id,
-                        "auth_cookie": self.auth_cookie,
+                        "auth_cookie": cookie,
                     }
                 },
             }
@@ -206,11 +211,30 @@ class OpencodeGoUsagePlugin(BasePlugin):
 
     # ── Direct-mode scrape ─────────────────────────────────────────────────
 
+    def _resolve_auth_cookie(self) -> str:
+        """Browser-extraction wins over the pasted value when ``browser`` is set."""
+        if not self.browser:
+            return self.auth_cookie
+        try:
+            cookies = list_cookies(self.cookie_domain, browser=self.browser)
+        except CookieError as e:
+            self.log(LogLevel.WARNING, f"browser cookie lookup failed: {e}")
+            return self.auth_cookie
+        value = cookies.get("auth")
+        if not value:
+            self.log(
+                LogLevel.WARNING,
+                f"no 'auth' cookie for {self.cookie_domain} in {self.browser}",
+            )
+            return self.auth_cookie
+        return value
+
     def _fetch_direct(self) -> bool:
         if not self.workspace_id:
             self.error_message = "No\nworkspace"
             return False
-        if not self.auth_cookie:
+        cookie = self._resolve_auth_cookie()
+        if not cookie:
             self.error_message = "No\ncookie"
             return False
 
@@ -220,7 +244,7 @@ class OpencodeGoUsagePlugin(BasePlugin):
             "Accept": (
                 "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
             ),
-            "Cookie": f"auth={self.auth_cookie}",
+            "Cookie": f"auth={cookie}",
         }
         try:
             response = requests.get(url, headers=headers, timeout=10)
@@ -254,8 +278,12 @@ class OpencodeGoUsagePlugin(BasePlugin):
         return True
 
     def _fetch_usage(self) -> bool:
-        if self.quota_sentinel_url:
-            return self._fetch_from_sentinel()
+        # Sentinel-first when configured, with fall-through to direct
+        # mode so a misconfigured / restarting / outdated sentinel never
+        # blacks out the badge as long as direct mode still has creds.
+        if self.quota_sentinel_url and self._fetch_from_sentinel():
+            self.error_message = None
+            return True
         return self._fetch_direct()
 
     # ── Drawing primitives ────────────────────────────────────────────────
@@ -450,6 +478,8 @@ class OpencodeGoUsagePlugin(BasePlugin):
     def on_config_update(self, config: dict[str, Any]) -> None:
         self.workspace_id = (config.get("workspace_id") or "").strip()
         self.auth_cookie = (config.get("auth_cookie") or "").strip()
+        self.browser = (config.get("browser") or "").strip().lower()
+        self.cookie_domain = (config.get("cookie_domain") or COOKIE_DOMAIN).strip()
         self.poll_interval = max(int(config.get("poll_interval", 300)), 60)
         self.display_mode = config.get("display_mode", "compact")
         self.rotate_interval = int(config.get("rotate_interval", 5))

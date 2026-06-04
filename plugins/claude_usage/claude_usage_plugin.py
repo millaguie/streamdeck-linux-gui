@@ -207,9 +207,18 @@ class ClaudeUsagePlugin(BasePlugin):
             return None
 
     def _fetch_usage(self) -> dict[str, Any] | None:
-        """Fetch usage data from Claude API or Quota Sentinel."""
+        """Fetch usage data from Claude API or Quota Sentinel.
+
+        Sentinel-first when configured but if it returns nothing (the
+        deployed sentinel is restarting / outdated / not yet polled) we
+        fall through to a direct OAuth fetch so the badge keeps showing
+        the right percentage.
+        """
         if self.quota_sentinel_url:
-            return self._fetch_from_sentinel()
+            sentinel_result = self._fetch_from_sentinel()
+            if sentinel_result:
+                self.error_message = None
+                return sentinel_result
 
         oauth = self._load_credentials()
         if not oauth:

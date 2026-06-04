@@ -254,17 +254,25 @@ class ZaiUsagePlugin(BasePlugin):
         return [l for l in self.quota_data if l.get('type') == 'TOKENS_LIMIT']
 
     def _unit_label(self, limit: dict[str, Any]) -> str:
-        """Get a human-readable label for a quota unit."""
+        """Get a human-readable label for a quota unit.
+
+        Direct mode payloads carry ``unit`` (integer enum) + ``number``.
+        Sentinel mode synthesises entries from a flat window name and
+        stores it in ``_label`` — fall back to that so we don't render
+        ``uNone`` when the API enum is missing.
+        """
         unit = limit.get('unit')
         number = limit.get('number', '')
         if unit == 3:
             return f"{number}h"
-        elif unit == 6:
+        if unit == 6:
             return f"{number}d"
-        elif unit == 5:
+        if unit == 5:
             return "MCP"
-        else:
-            return f"u{unit}"
+        label = limit.get('_label')
+        if label:
+            return str(label)
+        return f"u{unit}" if unit is not None else "Quota"
 
     def _update_display(self) -> None:
         """Update the button display."""

@@ -17,9 +17,28 @@ variables:
     description: "CrofAI API key (from crof.ai dashboard). Optional — /v1/models works without auth."
     required: false
 
+  - name: browser
+    type: select
+    description: "Auto-read the 'session' cookie from a local browser. Pick 'disabled' to use the pasted session_cookie."
+    required: false
+    default: ""
+    choices:
+      - {value: "",         label: "disabled (use pasted cookie)"}
+      - {value: "auto",     label: "auto (firefox → brave → chrome → chromium)"}
+      - {value: "firefox",  label: "Firefox"}
+      - {value: "brave",    label: "Brave"}
+      - {value: "chrome",   label: "Chrome"}
+      - {value: "chromium", label: "Chromium"}
+
+  - name: cookie_domain
+    type: string
+    description: "Cookie domain to look up in the browser store (default: crof.ai)."
+    required: false
+    default: crof.ai
+
   - name: session_cookie
     type: password
-    description: "Paste the VALUE of the 'session' cookie from your browser (DevTools → Application/Storage → Cookies → crof.ai → row 'session' → copy the 'Value' column). It's a long string (100+ chars), typically starts with 'eyJ' or '.eJw'. Do NOT paste the URL or the cookie name."
+    description: "Paste the VALUE of the 'session' cookie from your browser (DevTools → Application/Storage → Cookies → crof.ai → row 'session' → copy the 'Value' column). Only used when 'browser' is empty. It's a long string (100+ chars), typically starts with 'eyJ' or '.eJw'. Do NOT paste the URL or the cookie name."
     required: false
 
   - name: opencode_auth_path
@@ -44,5 +63,10 @@ variables:
     description: Seconds between view rotation (only used in rotate mode)
     required: false
     default: 5
+
+  - name: quota_sentinel_url
+    type: url
+    description: "Optional Quota Sentinel URL (e.g. http://localhost:7878). If set, credits/usable_requests come from the sentinel's /v1/providers/crofai instead of being scraped directly. The /v1/models endpoint stays direct since it's public."
+    required: false
 
 icon: crof_icon.png

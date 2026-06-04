@@ -1,6 +1,6 @@
 name: MiniMax Usage Monitor
-version: 1.0.0
-description: Shows MiniMax Coding Plan consumption (prompts remaining, rolling window) with progress bars and reset times.
+version: 1.1.0
+description: Shows MiniMax Coding Plan consumption (prompts remaining, rolling window) with progress bars and reset times. The /coding_plan/remains endpoint now needs a session cookie from platform.minimax.io in addition to the API key.
 author: StreamDeck UI Community
 entry_point: minimax_usage_plugin.py
 license: MIT
@@ -21,6 +21,30 @@ variables:
     type: string
     description: "MiniMax Group ID (from platform.minimax.io/user-center/basic-information)"
     required: true
+
+  - name: browser
+    type: select
+    description: "Auto-read the platform.minimax.io session cookie from a local browser instead of pasting it. Pick 'disabled' to use the pasted session_cookie."
+    required: false
+    default: ""
+    choices:
+      - {value: "",         label: "disabled (use pasted cookie)"}
+      - {value: "auto",     label: "auto (firefox → brave → chrome → chromium)"}
+      - {value: "firefox",  label: "Firefox"}
+      - {value: "brave",    label: "Brave"}
+      - {value: "chrome",   label: "Chrome"}
+      - {value: "chromium", label: "Chromium"}
+
+  - name: cookie_domain
+    type: string
+    description: "Cookie domain to look up in the browser store (default: platform.minimax.io)."
+    required: false
+    default: platform.minimax.io
+
+  - name: session_cookie
+    type: password
+    description: "Session cookie from platform.minimax.io (DevTools → Application → Cookies). Required for direct mode — the /coding_plan/remains endpoint rejects the API key alone with 'cookie is missing'. Only used when 'browser' is empty."
+    required: false
 
   - name: opencode_auth_path
     type: file_path
