@@ -204,14 +204,34 @@ class DraggableButton(QToolButton):
             action = move_menu.addAction(f"Page {target_page + 1}" if target_page == 0 else f"{target_page + 1}")
             action.setData(target_page)
 
+        # When there is nowhere to move the button, keep the entry visible but
+        # disabled instead of hiding the whole menu — so "Clear button" still shows.
         if move_menu.isEmpty():
-            return
+            move_menu.setEnabled(False)
+
+        menu.addSeparator()
+        clear_action = menu.addAction("Clear button")
 
         selected_action = menu.exec(e.globalPos())
         if selected_action is None:
             return
 
+        if selected_action is clear_action:
+            confirm = QMessageBox(self)
+            confirm.setWindowTitle("Clear button")
+            confirm.setText("Remove this button's configuration?")
+            confirm.setStandardButtons(
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            confirm.setIcon(QMessageBox.Icon.Question)
+            if confirm.exec() == QMessageBox.StandardButton.Yes:
+                self.api.clear_button(deck_id, page_id, button_index)
+                redraw_buttons()
+            return
+
         target_page = selected_action.data()
+        if target_page is None:
+            return
         self.api.move_button_to_page(deck_id, page_id, button_index, target_page)
         redraw_buttons()
 

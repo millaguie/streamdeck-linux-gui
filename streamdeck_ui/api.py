@@ -1049,6 +1049,25 @@ class StreamDeckServer:
         self.set_button_plugin_config(serial_number, page, button, {})
         self.set_button_plugin_can_switch_page(serial_number, page, button, False)
 
+    def clear_button(self, serial_number: str, page: int, button: int) -> None:
+        """Reset a button to empty: stop any attached plugin and wipe its config.
+
+        Mirrors the "reset source button to default" step of
+        :meth:`move_button_to_page`, but in place (no move), and additionally
+        stops/detaches a plugin if one is attached.
+        """
+        if self.plugin_manager is not None and self.get_button_plugin_id(
+            serial_number, page, button
+        ):
+            self.detach_plugin_from_button(serial_number, page, button)
+
+        self.state[serial_number].buttons[page][button] = ButtonMultiState(
+            state=0, states={0: ButtonState()}
+        )
+        self._save_state()
+        self._update_button_filters(serial_number, page, button)
+        self.display_handlers[serial_number].synchronize()
+
     def _handle_plugin_image_update(
         self, deck_serial: str, page: int, button: int, update_data: dict[str, Any]
     ) -> None:
