@@ -35,6 +35,7 @@ class ClaudeUsagePlugin(BasePlugin):
         self.rotate_interval = int(config.get('rotate_interval', 5))
 
         self.quota_sentinel_url = config.get('quota_sentinel_url', '').split('/v1')[0].rstrip('/')
+        self.account = config.get('account', '').strip()
         self._sentinel_api_key = ''
         self._sentinel_instance_id = ''
 
@@ -134,6 +135,10 @@ class ClaudeUsagePlugin(BasePlugin):
                     }
                 },
             }
+            # Optional friendly account label so multiple Claude accounts stay
+            # distinct in the sentinel (otherwise they collide on provider name).
+            if self.account:
+                payload['account'] = self.account
             resp = requests.post(f"{self.quota_sentinel_url}/v1/instances", json=payload, timeout=10)
             resp.raise_for_status()
             data = resp.json()
@@ -171,7 +176,10 @@ class ClaudeUsagePlugin(BasePlugin):
                 self.log(LogLevel.INFO, "Provider 'claude' not registered in Sentinel")
                 return None
 
-            response = requests.get(f"{self.quota_sentinel_url}/v1/providers/claude", headers=self._sentinel_headers(), timeout=10)
+            url = f"{self.quota_sentinel_url}/v1/providers/claude"
+            if self.account:
+                url += f"?account={self.account}"
+            response = requests.get(url, headers=self._sentinel_headers(), timeout=10)
             if response.status_code == 404:
                 self.log(LogLevel.INFO, "Provider 'claude' not yet registered in Sentinel")
                 return None
@@ -450,6 +458,7 @@ class ClaudeUsagePlugin(BasePlugin):
         self.display_mode = config.get('display_mode', 'compact')
         self.rotate_interval = int(config.get('rotate_interval', 5))
         self.quota_sentinel_url = config.get('quota_sentinel_url', '').split('/v1')[0].rstrip('/')
+        self.account = config.get('account', '').strip()
         self._sentinel_api_key = ''
         self._sentinel_instance_id = ''
         self.log(LogLevel.INFO, "Configuration updated")

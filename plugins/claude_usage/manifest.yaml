@@ -40,4 +40,9 @@ variables:
     description: "Optional Quota Sentinel URL (e.g. http://localhost:7878). If set, fetches usage from Quota Sentinel instead of calling the API directly."
     required: false
 
+  - name: account
+    type: string
+    description: "Optional account label (e.g. 'personal' / 'work') to distinguish multiple accounts of this provider in Quota Sentinel. Set a different value on each account's button."
+    required: false
+
 icon: claude_icon.png
