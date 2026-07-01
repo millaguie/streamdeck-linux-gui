@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "streamdeck-gui-ng"
-version = "4.13.0"
+version = "4.14.0"
 description = "Next Generation Linux UI for the Elgato Stream Deck - Modernized fork with Python 3.12+ support (including 3.14)"
 authors = ["Timothy Crosley <timothy.crosley@gmail.com>"]
 maintainers = ["millaguie <millaguie@users.noreply.github.com>"]
