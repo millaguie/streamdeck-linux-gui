@@ -1,0 +1,70 @@
+name: Alibaba Token Plan (Team Edition) Usage Monitor
+version: 0.1.0
+description: >
+  Shows Alibaba Cloud Model Studio Token Plan (Team Edition) Credits balance
+  (used / remaining) for the seat-based subscription used by the Hermes fleet.
+  Feeds the console session cookie to Quota Sentinel, which auto-scrapes the
+  rotating sec_token from the dashboard and queries the undocumented console
+  RPC (GetSubscriptionSummary, BssOpenAPI-V3) — the only way to read Token
+  Plan Credits (no API-key usage endpoint exists).
+  Source of the RPC: https://github.com/steipete/CodexBar (docs/alibaba-token-plan.md)
+author: StreamDeck UI Community
+entry_point: alibaba_tokenplan_usage_plugin.py
+license: MIT
+
+lifecycle_mode: always_running
+can_switch_page: false
+
+max_retries: 5
+retry_delay: 30
+
+variables:
+  - name: quota_sentinel_url
+    type: url
+    description: "Quota Sentinel base URL (e.g. https://quota-sentinel.millaguie.net). Required — this plugin is a feeder."
+    required: false
+
+  - name: region
+    type: select
+    description: "Token Plan region of your subscription."
+    required: false
+    default: intl
+    choices:
+      - {value: "intl", label: "International (Singapore / alibabacloud.com)"}
+      - {value: "cn",   label: "China mainland (aliyun.com)"}
+
+  - name: browser
+    type: select
+    description: "Browser to read the logged-in aliyun console session cookie from. Pick 'disabled' only if pasting a manual cookie."
+    required: false
+    default: chrome
+    choices:
+      - {value: "chrome",   label: "Chrome"}
+      - {value: "auto",     label: "auto (firefox → brave → chrome → chromium)"}
+      - {value: "firefox",  label: "Firefox"}
+      - {value: "brave",    label: "Brave"}
+      - {value: "chromium", label: "Chromium"}
+      - {value: "",         label: "disabled (use pasted cookie)"}
+
+  - name: cookie_domain
+    type: string
+    description: "Cookie domain of the logged-in console. Leave empty: defaults to alibabacloud.com (intl) / aliyun.com (cn)."
+    required: false
+
+  - name: session_cookie
+    type: password
+    description: "Manual fallback: pasted Cookie header from the logged-in console (only used when browser = disabled)."
+    required: false
+
+  - name: sec_token
+    type: password
+    description: "Optional manual override. Normally leave EMPTY — the sentinel auto-scrapes the rotating sec_token from the dashboard."
+    required: false
+
+  - name: poll_interval
+    type: int
+    description: Polling interval in seconds
+    required: false
+    default: 300
+
+icon: alibaba_tokenplan_icon.png
